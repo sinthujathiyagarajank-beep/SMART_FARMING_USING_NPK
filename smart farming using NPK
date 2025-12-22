@@ -1,0 +1,159 @@
+#include <ESP8266WiFi.h>
+#include <LiquidCrystal_I2C.h>
+#include <DHT.h>
+#include <SoftwareSerial.h>
+
+// Wi-Fi credentials
+const char* ssid = "NPK";
+const char* password = "123456789";
+
+// LCD display setup
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// DHT11 sensor setup
+#define DHTPIN D7
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
+
+// Soil moisture sensor pin
+#define SOIL_MOISTURE_PIN A0
+
+// NPK sensor RS485 communication pins
+#define RE D3
+#define DE D4
+SoftwareSerial mod(D5, D6); // RX, TX
+
+// Modbus RTU requests for NPK values
+const byte nitro[] = {0x01, 0x03, 0x00, 0x1E, 0x00, 0x01, 0xE4, 0x0C};
+const byte phos[] = {0x01, 0x03, 0x00, 0x1F, 0x00, 0x01, 0xB5, 0xCC};
+const byte pota[] = {0x01, 0x03, 0x00, 0x20, 0x00, 0x01, 0x85, 0xC0};
+byte values[11];
+
+// Web server setup
+WiFiServer server(80);
+
+void setup() {
+  // Start serial communication
+  Serial.begin(115200);
+
+  // Initialize LCD
+  lcd.init();
+  lcd.backlight();
+lcd.setCursor(0, 0); lcd.print("SMART FARM    ");
+  lcd.setCursor(4, 1); lcd.print("MONITORING");
+  delay(2000);
+  lcd.clear();
+  // Initialize DHT sensor
+  dht.begin();
+
+  // Set up RS485 communication
+  mod.begin(9600);
+  pinMode(RE, OUTPUT);
+  pinMode(DE, OUTPUT);
+  digitalWrite(RE, LOW);
+  digitalWrite(DE, LOW);
+
+  // Connect to Wi-Fi
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("WiFi connected");
+  server.begin();
+}
+
+void loop() {
+  // Read sensor values
+  float h = dht.readHumidity();
+  float t = dht.readTemperature();
+  int soilMoistureValue = analogRead(SOIL_MOISTURE_PIN);
+  byte val1 = nitrogen();
+  byte val2 = phosphorous();
+  byte val3 = potassium();
+
+  // Display readings on LCD
+  lcd.setCursor(0, 0);
+  lcd.print("T:");
+  lcd.print(t);
+  lcd.setCursor(9, 0);
+  lcd.print("H:");
+  lcd.print(h);
+  lcd.setCursor(0, 1);
+  lcd.print("Land dry:");
+  lcd.print(map(soilMoistureValue, 0, 1023, 0, 100));
+  lcd.print("%");
+
+  // Handle web clients
+  WiFiClient client = server.available();
+  if (client) {
+    String s = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n";
+    s += "<!DOCTYPE html>";
+    s += "<html>";
+    s += "<head>";
+    
+    s += "<title>Sensor Readings</title>";
+    s += "<style>";
+    s += "<meta http-equiv='refresh' content='3'></head><body bgcolor='lightgreen'>";
+    s += "body {background-color: #f0f0f0; font-family: Arial, sans-serif; text-align: center;}";
+    s += "table {width: 80%; margin: 20px auto; border-collapse: collapse;}";
+    s += "th, td {padding: 10px; border: 1px solid #ddd;}";
+    s += "th {background-color: #4CAF50; color: white;}";
+    s += "tr:nth-child(even) {background-color: #f2f2f2;}";
+    s += "h1 {color: #333;}";
+    s += "</style>";
+    s += "</head>";
+    s += "<body>";
+    s += "<h1>SMART LAND MONITORING</h1>";
+    s += "<table>";
+    s += "<tr><th>Temperature (°C)</th><th>Humidity (%)</th><th>Soil Moisture (%)</th><th>Nitrogen (mg/kg)</th><th>Phosphorous (mg/kg)</th><th>Potassium (mg/kg)</th></tr>";
+    s += "<tr><td>" + String(t) + "</td><td>" + String(h) + "</td><td>" + String(map(soilMoistureValue, 0, 1023, 0, 100)) + "</td><td>" + String(val1) + "</td><td>" + String(val2) + "</td><td>" + String(val3) + "</td></tr>";
+    s += "</table>";
+    s += "</body>";
+    s += "</html>";
+    client.print(s);
+    delay(100);
+  }
+}
+
+byte nitrogen() {
+  digitalWrite(DE, HIGH);
+  digitalWrite(RE, HIGH);
+  delay(10);
+  if (mod.write(nitro, sizeof(nitro)) == 8) {
+    digitalWrite(DE, LOW);
+    digitalWrite(RE, LOW);
+    for (byte i = 0; i < 7; i++) {
+      values[i] = mod.read();
+    }
+  }
+  return values[4];
+}
+
+byte phosphorous() {
+  digitalWrite(DE, HIGH);
+  digitalWrite(RE, HIGH);
+  delay(10);
+  if (mod.write(phos, sizeof(phos)) == 8) {
+    digitalWrite(DE, LOW);
+    digitalWrite(RE, LOW);
+    for (byte i = 0; i < 7; i++) {
+      values[i] = mod.read();
+    }
+  }
+  return values[4];
+}
+
+byte potassium() {
+  digitalWrite(DE, HIGH);
+  digitalWrite(RE, HIGH);
+  delay(10);
+  if (mod.write(pota, sizeof(pota)) == 8) {
+    digitalWrite(DE, LOW);
+    digitalWrite(RE, LOW);
+    for (byte i = 0; i < 7; i++) {
+      values[i] = mod.read();
+    }
+  }
+  return values[4];
+}
